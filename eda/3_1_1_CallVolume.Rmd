@@ -1,0 +1,246 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r}
+
+library(VancouvR) # accessing vancouver open data portal
+library(tidyverse)
+library(ggforce)
+library(lubridate)
+library(janitor)
+library(skimr)
+library(ggbeeswarm)
+library(ggthemes)
+library(scales)
+library(fs)
+
+options(lubridate.week.start = 1)
+
+
+
+tmp <-search_cov_datasets("animal")
+tmp2 <-search_cov_datasets("311")
+tmp$dataset_id
+meta_detail <-get_cov_metadata("animal-control-inventory-register")
+
+meta_detail %>% filter(name=="pitnumber") %>% pull(description)
+dog_df <- get_cov_data("animal-control-inventory-register") 
+
+tmp$description
+
+lost_found <- get_cov_data("animal-control-inventory-lost-and-found")
+lost_found %>% count(state, sort=T)
+
+
+call_311 <- get_cov_data(tmp2$dataset_id[2])
+call_311$link_to_csv
+
+download.file("https://webtransfer.vancouver.ca/opendata/csv/CaseLocationsDetails_2019_CSV.zip","tmp/2019.zip")
+download.file("https://webtransfer.vancouver.ca/opendata/csv/CaseLocationsDetails_2018_CSV.zip","tmp/2018.zip")
+download.file("https://webtransfer.vancouver.ca/opendata/csv/CaseLocationsDetails_2017_CSV.zip","tmp/2017.zip")
+download.file("https://webtransfer.vancouver.ca/opendata/csv/CaseLocationsDetails_2016_CSV.zip","tmp/2016.zip")
+download.file("https://webtransfer.vancouver.ca/opendata/csv/CaseLocationsDetails_2015_CSV.zip","tmp/2015.zip")
+download.file("https://webtransfer.vancouver.ca/opendata/csv/CaseLocationsDetails_2014_CSV.zip","tmp/2014.zip")
+download.file("https://webtransfer.vancouver.ca/opendata/csv/CaseLocationsDetails_2013_CSV.zip","tmp/2013.zip")
+download.file("https://webtransfer.vancouver.ca/opendata/csv/CaseLocationsDetails_2012_CSV.zip","tmp/2012.zip")
+download.file("https://webtransfer.vancouver.ca/opendata/csv/CaseLocationsDetails_2011_CSV.zip","tmp/2011.zip")
+download.file("https://webtransfer.vancouver.ca/opendata/csv/CaseLocationsDetails_2010_CSV.zip","tmp/2010.zip")
+download.file("https://webtransfer.vancouver.ca/opendata/csv/CaseLocationsDetails_2009_CSV.zip","tmp/2009.zip")
+
+file_names <- dir_ls("tmp/2019")
+dat_2019 <-file_names %>% map_df(., read_csv)
+
+file_names <- dir_ls("tmp/2018")
+dat_2018 <-file_names %>% map_df(., read_csv)
+
+file_names <- dir_ls("tmp/2017")
+dat_2017 <-file_names %>% map_df(., read_csv)
+
+file_names <- dir_ls("tmp/2016")
+dat_2016 <-file_names %>% map_df(., read_csv)
+
+file_names <- dir_ls("tmp/2015")
+dat_2015 <-file_names %>% map_df(., read_csv)
+
+
+dat <- bind_rows(dat_2019,dat_2018,dat_2017,dat_2016,dat_2015)
+dat <- dat %>% 
+  mutate(local_area_name=case_when(Local_Area=="Arbutus Ridge" ~ "Arbutus-Ridge",
+                                   Local_Area=="Dunbar Southlands" ~ "Dunbar-Southlands",
+                                   TRUE ~ Local_Area))
+
+dat %>%
+  mutate(Division=fct_infreq(Division)) %>%
+  count(Division, Case_Type)%>%
+  ggplot(aes(x=Division, y=n)) +
+  geom_col(aes(group=Case_Type), color="white") +
+  coord_flip() +
+  theme_fivethirtyeight() +
+  labs(title="3-1-1 Calls Vancouver",
+       subtitle="Data from 2015-2019")
+
+dat %>%
+  filter(str_detect(Division,"Animal")) %>%
+  mutate(local_area_name=fct_infreq(local_area_name), Case_Type=fct_infreq(Case_Type)) %>%
+  count(Year,local_area_name,Case_Type, sort=T) %>%
+  ggplot(aes(x=local_area_name, y=n)) +
+  geom_col(aes(fill=Case_Type)) +
+  coord_flip() +
+  theme_fivethirtyeight(base_family="Roboto Condensed") +
+  labs(title="2015-2019 : 311 Animal Service Call counts by Neighbourhood") +
+  facet_wrap(~Year)
+
+
+dat <- dat %>%
+  mutate(local_area_name=fct_explicit_na(fct_infreq(local_area_name)),
+         Case_Type=fct_infreq(Case_Type),
+         CallDate= ymd_hm(paste0(Year,"-",Month,"-",Day," ",Hour,":",Minute)))
+
+dat %>% count(Case_Type, sort=T) %>% DT::datatable()
+  mutate(n=log(n)) %>%
+  wordcloud2::wordcloud2(rotateRatio=0, size=0.3, fontFamily="Roboto Condensed")
+
+ani_dat <- dat %>% filter(str_detect(Case_Type,"(Animal|Pet|Stray)")|str_detect(Division,"Animal"))
+ani_dat %>% count(Division, Case_Type)
+
+ani_dat_stray <- ani_dat %>%
+  filter(str_detect(Case_Type,"Stray"))
+
+ani_dat_lost <- ani_dat %>%
+  filter(str_detect(Case_Type,"Lost"))
+
+
+ani_dat_stray %>%
+  mutate(dt = as.Date(CallDate),
+         wkdy = wday(dt, label=T)) %>%
+  count(Hour,wkdy, Year) %>%
+  complete(Hour=c(0:23),wkdy,Year, fill=list(n=0)) %>%
+  ggplot(aes(x=Hour, y=wkdy)) +
+  geom_tile(aes(fill=n)) +
+  scale_x_continuous(breaks=c(0:23)) +
+  scale_fill_viridis_c() +
+  facet_wrap(~Year, ncol=1) +
+  theme_fivethirtyeight()
+
+ani_dat_stray %>%
+  mutate(dt = as.Date(CallDate),
+         wkdy = wday(dt, label=T)) %>%
+  count(local_area_name, Year) %>%
+  complete(local_area_name,Year,fill=list(n=0)) %>%
+  ggplot(aes(x=Year,y=fct_rev(local_area_name))) +
+  geom_tile(aes(fill=n)) +
+  geom_text(aes(label=n), family="Roboto Condensed")+
+  theme_fivethirtyeight() +
+  scale_fill_viridis_c() 
+
+library(sf)
+van_neigh <- get_cov_data("local-area-boundary", format="geojson")
+van_neigh %>%
+  ggplot() +
+  geom_sf(color="white", fill="black") +
+  geom_sf_text(aes(label=name), angle=45, size=4, family="Roboto Condensed", color="white") +
+  theme_map()
+
+ani_dat_lost_geo <- ani_dat_stray %>%
+  count(local_area_name, Year) %>%
+  left_join(van_neigh %>% select(local_area_name = name,geometry)) %>%
+  st_as_sf()
+
+ani_dat_lost_geo
+ani_dat_lost_geo %>%
+  ggplot() +
+  geom_sf(aes(fill=n), color="white") +
+  geom_sf_text(aes(label=n), color="#ffffffde") +
+  facet_wrap(~Year,ncol=5) +
+  theme_map(base_family="Roboto Condensed") +
+  scale_fill_viridis_c(name="Number of Stray Animal Calls") +
+  theme(legend.position="bottom", legend.direction="horizontal")
+
+theme_fivethirtyeight()
+
+
+sort(unique(as.character(ani_dat_lost$Local_Area)))
+sort(unique(van_neigh$name))
+
+van_neigh %>%
+  ggplot() +
+  geom_sf() +
+  theme_map()
+
+?get_cov_data
+search_cov_datasets("neighbour") %>% select(dataset_id, title)
+
+dat %>%
+  mutate(dt=as.Date(CallDate), case_type=fct_lump(fct_infreq(Case_Type),n=18)) %>%
+  count(dt,case_type) %>%
+  complete(dt = seq.Date(min(dt), max(dt), by="day"),
+           fill=list(n=0))  %>%
+  mutate(mo=month(dt,label=T), 
+         mo_num=month(dt),
+         yr=year(dt), 
+         wkdy=wday(dt,label=T),
+         wk=week(dt),
+         day=yday(dt)) %>%
+  ggplot(aes(x=mo,y=n)) +
+  geom_col(aes(fill=case_type)) +
+  facet_grid(wkdy~yr) +
+  theme_fivethirtyeight()
+
+library(tabyl)
+res <-dat %>% 
+  mutate(Case_Type_f = fct_lump(fct_infreq(Case_Type),n=30)) %>%
+  tabyl(Case_Type_f, Year) %>% chisq.test()  
+res$observed %>% adorn_totals(where=c("row","col"))
+
+res$residuals
+res$stdres
+res$stdres %>% pivot_longer(-1)  %>%
+  ggplot(aes(x=name, y=Case_Type_f)) +
+  geom_tile(aes(fill=value)) +
+  scale_fill_gradient2_tableau("Temperature Diverging", labels=c("Less than expected","Expected","More than Expected"), breaks=c(-50,0,50)) +
+  geom_text(data = res$observed %>% pivot_longer(-1), aes(label=str_c(value," ")), hjust=1, size=3, color="#000000ee", fontface="bold") +
+  geom_text(data = res$expected %>% pivot_longer(-1), aes(label=str_c("(",round(value),")")), hjust=0, size=3, color="#000000ae") +
+  labs(title="Case Types by Year",
+       subtitle = "Number of 311 Calls (Number of Expected Counts if All Years are the same)") +
+  theme_fivethirtyeight(base_family="Roboto Condensed") +
+  guides(fill = guide_colourbar(barwidth = 25, barheight = 0.5)) +
+  scale_x_discrete(position="top")
+  
+ggsave("output/CaseTypesByYear.png", width=9, height=11)
+
+
+## append date duration and intervals
+dog_df <-dog_df %>% mutate(entry_date=dateimpounded,
+                           exit_date=dispositiondate,
+                  custody_int = entry_date %--% exit_date,
+                  custody_dur = time_length(custody_int,"days"))
+
+
+
+```
+
+## Dog 
+
+```{r}
+
+summary(dog_df$animalid)
+dog_df %>% filter(custody_dur>=0 & animalid>=20000) %>% 
+  mutate(status=fct_infreq(status)) %>%
+  ggplot(aes(x=-1,y=animalid)) +
+  geom_segment(aes(xend=custody_dur, yend=animalid, color=sex), alpha=0.3, size=0.1) +
+  theme_fivethirtyeight() +
+  coord_cartesian(xlim=c(-1,30)) +
+  facet_wrap(~status) +
+  geom_text(aes(x=15, y=25000, label=n), data= . %>% count(status))
+  
+
+
+
+```
+
+

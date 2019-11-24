@@ -1,0 +1,329 @@
+---
+title: "Initial Exploration"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+## Dog
+
+```{r}
+
+library(VancouvR) # accessing vancouver open data portal
+library(tidyverse)
+library(ggforce)
+library(lubridate)
+library(janitor)
+library(skimr)
+library(ggbeeswarm)
+library(ggthemes)
+library(scales)
+
+tmp <-search_cov_datasets("animal")
+tmp$dataset_id
+meta_detail <-get_cov_metadata("animal-control-inventory-register")
+
+meta_detail %>% filter(name=="pitnumber") %>% pull(description)
+dog_df <- get_cov_data("animal-control-inventory-register") 
+
+dog_df <-dog_df %>% mutate(entry_date=dateimpounded,
+                           exit_date=dispositiondate,
+                  custody_int = entry_date %--% exit_date,
+                  custody_dur = time_length(custody_int,"days"))
+
+dog_dur_exist <-dog_df %>% filter(!is.na(custody_dur)) %>% summarise(n=n(), min(entry_date), max(entry_date), min(exit_date),max(exit_date))
+
+dog_df %>%
+  mutate(status=fct_infreq(status)) %>%
+  count(custody_dur, status) %>%
+  mutate(custody_dur_bin = case_when(custody_dur<0  ~ "Error",
+                                     custody_dur<=7 ~ str_c(custody_dur," Days"),
+                                     custody_dur>7 & custody_dur<=14 ~ "1~2 Weeks",
+                                     custody_dur>14 & custody_dur<=30 ~ "2 weeks+",
+                                     custody_dur>30 ~ "Month+",
+                                     TRUE ~ "Hmmm")) %>%
+  filter(custody_dur_bin!="Hmmm") %>%
+  ggplot(aes(x=fct_reorder(custody_dur_bin,custody_dur,min),y=n)) +
+  geom_col(aes(fill=status), position="stack") +
+  theme_fivethirtyeight(base_family="Roboto Condensed") +
+  labs(title = "How Long Does Animal Typically Stay in Shelter?",
+    subtitle=str_glue("{dog_dur_exist$n} Animals with Duration Recorded"))
+
+ggsave("output/DogInShelter.png", width=16, height=9)
+
+
+dog_df %>%
+  mutate(status=fct_infreq(status)) %>%
+  count(custody_dur, sex) %>%
+  mutate(custody_dur_bin = case_when(custody_dur<0  ~ "Error",
+                                     custody_dur<=7 ~ str_c(custody_dur," Days"),
+                                     custody_dur>7 & custody_dur<=14 ~ "1~2 Weeks",
+                                     custody_dur>14 & custody_dur<=30 ~ "2 weeks+",
+                                     custody_dur>30 ~ "Month+",
+                                     TRUE ~ "Hmmm")) %>%
+  filter(custody_dur_bin!="Hmmm") %>%
+  ggplot(aes(x=fct_reorder(custody_dur_bin,custody_dur,min),y=n)) +
+  geom_col(aes(fill=sex), position="stack") +
+  theme_fivethirtyeight(base_family="Roboto Condensed") +
+  labs(title = "How Long Does Animal Typically Stay in Shelter?",
+    subtitle=str_glue("{dog_dur_exist$n} Animals with Duration Recorded"))
+
+ggsave("output/DogInShelter.png", width=16, height=9)
+
+
+## Kennel Number - Number of kennel displayed at the top of each kennel - 64 different kennel numbers, 18 rows missing data. 
+dog_df %>% count(kennelnumber, sort=T) #%>% mutate(n=log(n)) %>% wordcloud2()
+
+## Pit Number - Number identifying animal kennel. Never changes while the animal is in the City's custody. At least 413 pit number but 5334 missing.
+dog_df %>% count(pitnumber, sort=T) 
+
+dog_df %>% glimpse()
+
+
+## Who's been working there longest? or entering the record?
+dog_df %>% group_by(enteredby)  %>%
+  summarise(n=n(), first=min(dateimpounded), last=max(dateimpounded)) %>%
+  mutate(person = fct_reorder(enteredby,n)) %>%
+  ggplot(aes(x=first, y=person)) +
+  geom_segment(aes(xend=last, yend=person, color=n)) +
+  geom_text(aes(label=str_c(person,n,"entries",sep=" "), color=n), hjust=1, family="Avenir", size=3) +
+  theme_minimal() +
+  scale_y_discrete(breaks=NULL) +
+  scale_color_viridis_c(tran="sqrt") +
+  labs(x="Date Impounded as Date of Entry", y="") +
+  scale_x_date(breaks=date_breaks("year"), labels=date_format("%Y"))
+
+ggsave("output/AnimalEntry_Person.png", width=9, height=16)
+xopen::xopen("output/AnimalEntry_Person.svg")
+
+
+## Who has started to enter the enter by?
+dog_df %>% group_by(enteredby)  %>%
+  summarise(n=n(), first=min(dateimpounded), last=max(dateimpounded)) %>%
+  mutate(person = fct_reorder(enteredby,n)) %>%
+  arrange(first)
+
+
+
+## Do Dogs get into shelter on certain week of the day?
+dog_df %>% mutate(weekday = wday(dateimpounded, label=T),
+                  mo = month(dateimpounded, label=T),
+                  yr = year(dateimpounded)) %>%
+  ggplot(aes(x=weekday)) +
+  stat_count(aes(fill=factor(yr))) +
+  theme_fivethirtyeight(base_family="Avenir") +
+  facet_wrap(~mo) +
+  scale_fill_viridis_d(end=0.7, guide="none") +
+  labs(title="Which Week of Day Does Animal gets Impounded?",
+       subtitle = "Looks like it's pretty uniformly distributed!")
+
+ggsave("output/AnimalEnteringShelter_by_MoYr.png", width=16, height=9)
+
+
+
+
+## wait I think i need to fill in the date with no entry...with 0
+?complete
+dog_df_daily <- dog_df %>% filter(year(dateimpounded)>=1999) %>%
+  count(dateimpounded) %>%
+  #mutate(entry_date = as.Date(dateimpounded)) %>%
+  complete(dateimpounded = seq.Date(min(dateimpounded), max(dateimpounded), by="day"),
+           fill=list(n=0)) 
+
+dog_df_daily %>% 
+  mutate(weekday = wday(dateimpounded, label=T),
+                  mo = month(dateimpounded, label=T),
+                  yr = year(dateimpounded),
+                  wknum = week(dateimpounded)) %>%
+  count(yr,wknum,weekday, wt=n) %>% add_count(yr, wt=n, name="nn" ) %>% 
+  mutate(share=n/nn) %>%
+  filter(yr>=1999) %>%
+  ggplot(aes(x=weekday,y=wknum)) +
+  geom_tile(aes(fill=n)) +
+  facet_wrap(~yr,nrow=2) +
+  scale_fill_viridis_c(tran="sqrt", option="magma")+
+  scale_y_reverse(breaks=seq(1,52,by=4)) +
+  theme_fivethirtyeight(base_family="Roboto Condensed") +
+  scale_x_discrete(labels=c("S","M","T","W","T","F","S")) 
+
+ggsave("output/AnimalEnteringShelter_HeatMap_Clean.png", width=16, height=9)
+
+
+## How many dogs per day do we get in a shelter?
+dog_df_daily %>%
+  count(n) %>%
+  ggplot(aes(x=n,y=nn)) +
+  geom_col(aes(fill=n)) + 
+  scale_fill_viridis_c(tran="sqrt",option="magma", guide="none") +
+  theme_fivethirtyeight(base_family="Roboto Condensed") +
+  scale_x_continuous(breaks=c(0:23)) +
+  labs(title=str_glue("On Average {round(mean(dog_df_daily$n),2)} Animals Come in To Vancouver Shelter"))
+
+dog_df_daily %>%
+  filter(n>11) %>%
+  arrange(-n) %>%
+  mutate(dateimpounded = format(dateimpounded,"%Y %b %e %a")) %>%
+  wordcloud2::wordcloud2(rotateRatio=0, size=0.3)
+
+ggsave("output/DailyImpoundDogCount.png", width=16, height=3)
+
+
+
+
+
+dog_df %>% ggplot(aes(x=dispositiondate)) + stat_ecdf() +
+  stat_ecdf(aes(x=dateimpounded), color="tomato")
+dog_df %>% ggplot(aes(x=shotsdate)) + stat_ecdf()
+dog_df %>% ggplot(aes(x=dateimpounded)) + stat_ecdf()
+
+
+### 
+dog_df %>% 
+  mutate(status=fct_infreq(status),
+         exit_day_exist = !is.na(dispositiondate)) %>%
+  ggplot(aes(x=dateimpounded, fill=status)) +
+  stat_bin(aes(group=exit_day_exist, alpha=as.numeric(exit_day_exist)), size=0.1, color="white") +
+  theme_minimal() +
+  scale_fill_tableau("Tableau 20", na.value="grey") +
+  facet_wrap(~status, scales="free_y") +
+  geom_text(aes(x=median(dog_df$dateimpounded),y=Inf, label=n), data= . %>% count(status),
+            vjust=1) +
+  scale_alpha_continuous(range=c(0.5,1), limits=c(0,1), breaks=c(0,1),
+                         name="Disposition Date Exist?")
+
+ggsave("output/Dog_Status_Histogram.png", width=16, height=9)
+
+
+
+dog_df %>% count(status, sort=T) %>% pull(status) %>% clipr::write_clip()
+
+dog_df %>% ggplot(aes(x=sex,y=dateimpounded)) +
+  geom_violin(aes(fill=sex), draw_quantiles=T) +
+  geom_boxplot(varwidth=T, alpha=0.3) +
+  theme_minimal() +
+  scale_fill_tableau()
+
+dog_df %>% glimpse()
+animal_sex_filled <-dog_df %>% 
+  mutate(status=fct_lump(fct_infreq(status),n=8)) %>%
+  count(sex,status) %>%
+  ggplot(aes(x=sex,y=n, fill=status)) +
+  geom_col(position="fill") +
+  scale_fill_tableau() +
+  theme_fivethirtyeight()
+
+animal_sex_stack <-dog_df %>% 
+  mutate(status=fct_lump(fct_infreq(status),n=8)) %>%
+  count(sex,status) %>%
+  ggplot(aes(x=sex,y=n, fill=status)) +
+  geom_col(position="stack") +
+  scale_fill_tableau() +
+  theme_fivethirtyeight()
+
+library(patchwork)
+animal_sex_stack + animal_sex_filled
+
+
+col <- ggthemes::tableau_color_pal("Hue Circle")(19)
+library(wordcloud2)
+dog_df %>% count(pitnumber, sort=T)# %>%
+  filter(!is.na(pitnumber))  %>%
+  mutate(n=sqrt(n)) %>%
+  wordcloud2(rotateRatio=0, color=sample(col,size=3000, replace=T))
+
+## PitNumber
+dog_df %>% ggplot(aes(x=pitnumber)) +
+  stat_ecdf() +
+  theme_minimal() +
+  coord_cartesian(xlim=c(0,50000))
+
+dog_df %>% count(pitnumber) 
+  
+?geom_violin
+
+dog_df %>% 
+  mutate(name_exist=!is.na(name)) %>%
+  count(sex,name_exist, sort=T) %>%
+  ggplot(aes(x=sex,y=n, fill=name_exist)) +
+  geom_col() +
+  theme_minimal() +
+  scale_fill_grey()
+
+dog_df %>% count(color,sort=T) %>% mutate(n=sqrt(n)) %>%
+  wordcloud2(fontFamily="Roboto Condensed")
+
+dog_df %>% count(code,sort=T) %>% mutate(n=sqrt(n)) %>%
+  filter(!is.na(code)) %>%
+  wordcloud2(fontFamily="Roboto Condensed")
+
+dog_df %>% count(breed,sort=T) %>% mutate(n=sqrt(n)) %>%
+  wordcloud2(fontFamily="Roboto Condensed")
+
+dog_df %>% count(approxweight, sort=T)%>%
+  filter(!is.na(approxweight)) %>%
+  mutate(n=sqrt(n)) %>%
+  wordcloud2(fontFamily="Roboto Condensed")
+
+dog_df %>% mutate(wt_num = as.numeric(str_extract(approxweight, "[[:digit:]]+"))) %>%
+  select(approxweight, wt_num) %>%
+  ggplot(aes(x=wt_num)) + stat_density() +
+  theme_minimal()
+  
+library(scales)
+dog_df %>% ggplot(aes(x=floor_date(dateimpounded,"year"))) +
+  stat_count(aes(fill=fct_infreq(source))) +
+  theme_minimal() +
+  scale_x_date(breaks=date_breaks("year"), labels=date_format("%Y"))
+
+dog_df %>% 
+  arrange(animalid) %>%
+  mutate(idx=row_number(dateimpounded),
+         animal_id_idx = row_number(animalid)) %>%  
+  arrange(idx) %>%
+  ggplot(aes(x=idx,y=animal_id_idx)) +
+  geom_path(size=0.1) +
+  geom_point(aes(color=animal_id_idx-idx), size=1) +
+  theme_minimal() +
+  scale_color_viridis_c() 
+
+dog_df %>%
+  ggplot(aes(x=animalid)) + 
+  stat_ecdf(geom="point", size=0.1) +
+  stat_ecdf(size=0.1, color="tomato") +
+  theme_minimal() +
+  scale_y_continuous(labels=percent)
+
+
+library(ggforce)
+
+enter_exit <-dog_df %>% mutate(yr=year(dateimpounded),
+                  source = fct_lump(fct_explicit_na(fct_infreq(source)),n=6),
+                  status = fct_lump(fct_explicit_na(fct_infreq(status)),n=6)) %>%
+  count(source,status) 
+
+
+test <- gather_set_data(enter_exit, 1:2)
+ggplot(test, aes(x, id = id, split = y, value = n)) +
+  geom_parallel_sets(aes(fill = status), alpha = 0.3, axis.width = 0.4) +
+  geom_parallel_sets_axes(axis.width = 0.4) +
+  geom_parallel_sets_labels(colour = 'white', size=3, angle=0) +
+  theme_void(base_family="Roboto Condensed") +
+  scale_fill_tableau() +
+  labs(title="Top Source for Coming Into Shelter and Status of Dog")
+
+
+dog_df %>%
+  mutate(enter_dt = floor_date(dateimpounded, "year"),
+         dummy=1,
+         status_f=fct_explicit_na(fct_infreq(status)),
+         disp_date = floor_date(dispositiondate,"month")) %>%
+  ggplot(aes(x=enter_dt)) +
+  geom_col(aes(y=dummy, fill=status_f)) +
+  theme_minimal(base_family="Roboto Condensed") +
+  scale_fill_tableau("Tableau 20") +
+  labs(title="Year Animal Has Been Impounded",
+       subtitle="Browken down by Current Status")
+
+
+
+```
